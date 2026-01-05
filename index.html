@@ -2,187 +2,154 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>ナビ</title>
 
-<link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet">
-<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
 
 <style>
-html, body { margin:0; height:100%; }
-#map { height:100%; }
-
-#panel {
-  position:absolute;
-  top:env(safe-area-inset-top,10px);
-  left:50%;
-  transform:translateX(-50%);
-  background:#fff;
-  padding:10px;
-  border-radius:10px;
-  box-shadow:0 4px 10px rgba(0,0,0,.3);
-  z-index:10;
-  width:90%;
-  max-width:420px;
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+#map {
+  width: 100%;
+  height: 100%;
 }
 
-#info {
-  font-size:14px;
-  margin-top:6px;
+/* 検索UI */
+#searchBox {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: white;
+  padding: 6px;
+  border-radius: 10px;
+  display: flex;
+  gap: 5px;
+  z-index: 10;
+}
+#searchInput {
+  font-size: 16px;
+  padding: 6px;
+  width: 180px;
+}
+#searchBtn {
+  font-size: 16px;
 }
 
-#controls {
-  display:none;
-  margin-top:6px;
-  text-align:center;
+/* 現在地ボタン */
+#locBtn {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  background: white;
+  border-radius: 50%;
+  padding: 12px;
+  font-size: 20px;
+  z-index: 10;
 }
-
-button { margin:2px; font-size:15px; }
 </style>
 </head>
 
 <body>
 
-<div id="panel">
-  <input id="search" placeholder="住所を入力" style="width:100%;font-size:16px;">
-  <div id="controls">
-    <button onclick="setMode('foot-walking')">🚶 徒歩</button>
-    <button onclick="setMode('driving-car')">🚗 車</button>
-  </div>
-  <div id="info"></div>
-</div>
-
 <div id="map"></div>
 
+<div id="searchBox">
+  <input id="searchInput" placeholder="住所・場所を入力">
+  <button id="searchBtn">🔍</button>
+</div>
+
+<button id="locBtn">◎</button>
+
 <script>
-const ORS_API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImY0ZTI4ZDE0Y2I2NTQwNzM5ZWYzMDg5YTBlNmFkNTczIiwiaCI6Im11cm11cjY0In0=";
-
-let map, start, dest, mode="foot-walking";
-let userMarker, destMarker;
-let routeSources = [];
-let activeRoute = 0;
-
-map = new maplibregl.Map({
-  container:'map',
-  style:'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
-  center:[139.767,35.681],
-  zoom:15
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://demotiles.maplibre.org/style.json', // ←カラー地図
+  center: [139.767, 35.681],
+  zoom: 15
 });
 
-map.doubleClickZoom.disable();
 map.addControl(new maplibregl.NavigationControl());
+map.doubleClickZoom.disable();
 
-/* ==== 現在地（矢印） ==== */
-navigator.geolocation.watchPosition(pos=>{
-  start=[pos.coords.longitude,pos.coords.latitude];
+let currentMarker;
+let destMarker;
 
-  if(!userMarker){
-    const el=document.createElement("div");
-    el.style.width="22px";
-    el.style.height="22px";
-    el.style.background="#007aff";
-    el.style.clipPath="polygon(50% 0, 0 100%, 100% 100%)";
-    userMarker=new maplibregl.Marker(el).setLngLat(start).addTo(map);
-    map.setCenter(start);
+// 現在地取得
+navigator.geolocation.watchPosition(pos => {
+  const lng = pos.coords.longitude;
+  const lat = pos.coords.latitude;
+  const heading = pos.coords.heading || 0;
+
+  if (!currentMarker) {
+    currentMarker = new maplibregl.Marker({
+      color: '#1e90ff'
+    }).setLngLat([lng, lat]).addTo(map);
+    map.setCenter([lng, lat]);
   } else {
-    userMarker.setLngLat(start);
+    currentMarker.setLngLat([lng, lat]);
   }
 
   map.easeTo({
-    center:start,
-    bearing:pos.coords.heading||map.getBearing(),
-    duration:500
+    center: [lng, lat],
+    bearing: heading,
+    duration: 500
   });
+}, err => {
+  alert("位置情報を許可してね");
+}, { enableHighAccuracy: true });
 
-  if(dest) getRoute();
-},{enableHighAccuracy:true});
+// 現在地ボタン
+document.getElementById("locBtn").onclick = () => {
+  if (currentMarker) {
+    map.easeTo({ center: currentMarker.getLngLat(), zoom: 17 });
+  }
+};
 
-/* ==== 検索 ==== */
-search.addEventListener("keydown",async e=>{
-  if(e.key!=="Enter")return;
-  const q=e.target.value;
-  const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`);
-  const d=await r.json();
-  if(!d[0])return alert("見つかりません");
-
-  setDestination([+d[0].lon,+d[0].lat]);
+// 検索
+document.getElementById("searchBtn").onclick = search;
+document.getElementById("searchInput").addEventListener("keydown", e => {
+  if (e.key === "Enter") search();
 });
 
-/* ==== 地図2回タップ ==== */
-let tap=0,timer;
-map.on("click",e=>{
-  tap++; clearTimeout(timer);
-  timer=setTimeout(()=>tap=0,300);
-  if(tap===2) setDestination([e.lngLat.lng,e.lngLat.lat]);
-});
+function search() {
+  const q = searchInput.value;
+  if (!q) return;
 
-function setDestination(p){
-  dest=p;
-  if(destMarker) destMarker.setLngLat(dest);
-  else destMarker=new maplibregl.Marker({color:"red"}).setLngLat(dest).addTo(map);
-  map.flyTo({center:dest,zoom:16});
-  controls.style.display="block";
-  getRoute();
-}
-
-/* ==== ルート取得（複数） ==== */
-function setMode(m){ mode=m; getRoute(); }
-
-async function getRoute(){
-  if(!start||!dest) return;
-
-  routeSources.forEach(id=>{
-    if(map.getLayer(id))map.removeLayer(id);
-    if(map.getSource(id))map.removeSource(id);
-  });
-  routeSources=[];
-
-  const res=await fetch(
-    `https://api.openrouteservice.org/v2/directions/${mode}/geojson`,
-    {
-      method:"POST",
-      headers:{
-        "Authorization":ORS_API_KEY,
-        "Content-Type":"application/json"
-      },
-      body:JSON.stringify({
-        coordinates:[start,dest],
-        alternative_routes:{target_count:3}
-      })
+  fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`, {
+    headers: { "Accept-Language": "ja" }
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (!data[0]) {
+      alert("見つからない😢");
+      return;
     }
-  );
-  const data=await res.json();
+    const lng = data[0].lon;
+    const lat = data[0].lat;
 
-  data.features.forEach((f,i)=>{
-    const id="route"+i;
-    map.addSource(id,{type:"geojson",data:f});
-    map.addLayer({
-      id,
-      type:"line",
-      source:id,
-      paint:{
-        "line-width": i===0?6:4,
-        "line-color": i===0?"#007aff":"#aaa"
-      }
-    });
-    map.on("click",id,()=>selectRoute(i));
-    routeSources.push(id);
+    if (destMarker) destMarker.remove();
+    destMarker = new maplibregl.Marker({ color: 'red' })
+      .setLngLat([lng, lat])
+      .addTo(map);
+
+    map.easeTo({ center: [lng, lat], zoom: 16 });
   });
-
-  selectRoute(0);
 }
 
-function selectRoute(i){
-  activeRoute=i;
-  routeSources.forEach((id,idx)=>{
-    map.setPaintProperty(id,"line-color",idx===i?"#007aff":"#aaa");
-    map.setPaintProperty(id,"line-width",idx===i?6:4);
-  });
-
-  const f=map.getSource(routeSources[i])._data.features[0];
-  const d=f.properties.summary;
-  info.textContent=`残り ${Math.round(d.distance/100)/10}km / 約 ${Math.round(d.duration/60)}分`;
-}
+// ダブルタップで目的地
+map.on("dblclick", e => {
+  if (destMarker) destMarker.remove();
+  destMarker = new maplibregl.Marker({ color: 'red' })
+    .setLngLat(e.lngLat)
+    .addTo(map);
+});
 </script>
+
 </body>
 </html>
