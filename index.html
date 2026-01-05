@@ -3,37 +3,68 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>限界突破ナビ</title>
+<title>限界突破3D音声ナビ</title>
 
 <link href="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet">
 <script src="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
 
 <style>
 html,body,#map{margin:0;height:100%}
+
+/* 上UI */
 #ui{
-  position:absolute;top:10px;left:50%;transform:translateX(-50%);
-  background:white;border-radius:14px;padding:8px;z-index:10;
-  box-shadow:0 4px 10px rgba(0,0,0,.3)
+  position:absolute;
+  top:10px;
+  left:50%;
+  transform:translateX(-50%);
+  background:white;
+  padding:8px;
+  border-radius:14px;
+  z-index:10;
+  box-shadow:0 4px 10px rgba(0,0,0,.3);
 }
 #ui input{font-size:16px;padding:6px;width:180px}
-#ui button{font-size:16px}
-#mode{
-  display:none;margin-top:6px;text-align:center
-}
-#mode button{margin:0 6px}
+#ui button{font-size:15px;margin-left:4px}
 
-#info{
-  position:absolute;bottom:20px;left:50%;transform:translateX(-50%);
-  background:white;padding:10px 14px;border-radius:16px;
-  box-shadow:0 4px 10px rgba(0,0,0,.3);
-  display:none;z-index:10;font-size:15px
+/* 視点切替 */
+#viewMode{
+  display:flex;
+  margin-top:6px;
+}
+#viewMode button{
+  flex:1;
+  margin:0 2px;
+  border-radius:8px;
 }
 
+/* 現在地ボタン */
 #locBtn{
-  position:absolute;bottom:20px;right:16px;
-  width:48px;height:48px;border-radius:50%;
-  border:none;background:white;font-size:22px;
-  box-shadow:0 2px 6px rgba(0,0,0,.3);z-index:10
+  position:absolute;
+  bottom:20px;
+  right:16px;
+  width:48px;
+  height:48px;
+  border-radius:50%;
+  border:none;
+  background:white;
+  font-size:22px;
+  box-shadow:0 2px 6px rgba(0,0,0,.3);
+  z-index:10;
+}
+
+/* 距離表示 */
+#info{
+  position:absolute;
+  bottom:80px;
+  left:50%;
+  transform:translateX(-50%);
+  background:white;
+  padding:10px 14px;
+  border-radius:16px;
+  box-shadow:0 4px 10px rgba(0,0,0,.3);
+  display:none;
+  z-index:10;
+  font-size:15px;
 }
 </style>
 </head>
@@ -44,18 +75,22 @@ html,body,#map{margin:0;height:100%}
 <div id="ui">
   <input id="searchInput" placeholder="目的地を入力">
   <button onclick="search()">🔍</button>
-  <div id="mode">
-    <button onclick="route('foot-walking')">🚶</button>
-    <button onclick="route('driving-car')">🚗</button>
+
+  <div id="viewMode">
+    <button onclick="setView('2d')">2D</button>
+    <button onclick="setView('2dn')">2DN</button>
+    <button onclick="setView('3d')">3D</button>
   </div>
 </div>
 
-<div id="info"></div>
 <button id="locBtn" onclick="goCurrent()">⌖</button>
+<div id="info"></div>
 
 <script>
+/* ===== APIキー ===== */
 const ORS_API_KEY = "ここにあなたのAPIキー";
 
+/* ===== 地図 ===== */
 const map = new maplibregl.Map({
   container:'map',
   style:'https://tiles.openfreemap.org/styles/liberty',
@@ -64,63 +99,156 @@ const map = new maplibregl.Map({
 });
 map.doubleClickZoom.disable();
 
-let current=[139.767,35.681];
+/* ===== 現在地 ===== */
+let current=null;
+let currentHeading=0;
+let viewMode='2d';
 let dest=null;
+let destMarker=null;
+let routeLayerAdded=false;
 
 navigator.geolocation.watchPosition(p=>{
   current=[p.coords.longitude,p.coords.latitude];
-  map.easeTo({center:current,bearing:p.coords.heading||0,duration:500});
+  currentHeading=p.coords.heading ?? currentHeading;
+
+  if(viewMode!=='2d'){
+    map.easeTo({
+      center:current,
+      bearing:currentHeading,
+      duration:500
+    });
+  }
 },{},{enableHighAccuracy:true});
 
 function goCurrent(){
+  if(!current){ alert("現在地取得中…"); return; }
   map.easeTo({center:current,zoom:17});
 }
 
-let destMarker;
+/* ===== 視点切替 ===== */
+function setView(mode){
+  viewMode = mode;
+  if(mode==='2d'){ map.easeTo({pitch:0,bearing:0,zoom:15,duration:800}); }
+  if(mode==='2dn'){ map.easeTo({pitch:0,bearing:currentHeading,zoom:16,duration:800}); }
+  if(mode==='3d'){ map.easeTo({pitch:60,bearing:currentHeading,zoom:17,duration:800}); enable3DBuildings(); }
+}
+
+/* ===== 建物3D ===== */
+let buildingsAdded=false;
+function enable3DBuildings(){
+  if(buildingsAdded) return;
+  map.addLayer({
+    id:'3d-buildings',
+    source:'openmaptiles',
+    'source-layer':'building',
+    type:'fill-extrusion',
+    minzoom:15,
+    paint:{
+      'fill-extrusion-color':'#aaa',
+      'fill-extrusion-height':['get','height'],
+      'fill-extrusion-base':['get','min_height'],
+      'fill-extrusion-opacity':0.6
+    }
+  });
+  buildingsAdded=true;
+}
+
+/* ===== 検索 ===== */
 function search(){
-  fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchInput.value)}`)
-  .then(r=>r.json()).then(d=>{
-    if(!d[0])return alert("見つからん😇");
+  const query = document.getElementById("searchInput").value;
+  fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`)
+  .then(r=>r.json())
+  .then(d=>{
+    if(!d[0]) return alert("見つからない😇");
     dest=[+d[0].lon,+d[0].lat];
-    if(destMarker)destMarker.remove();
+    if(destMarker) destMarker.remove();
     destMarker=new maplibregl.Marker({color:'red'}).setLngLat(dest).addTo(map);
     map.easeTo({center:dest,zoom:16});
-    document.getElementById("mode").style.display="block";
+    calcRoute('foot-walking'); // 徒歩デフォ
   });
 }
 
-map.on("dblclick",e=>{
+/* ===== ダブルタップ目的地 ===== */
+map.on('dblclick',e=>{
   dest=[e.lngLat.lng,e.lngLat.lat];
-  if(destMarker)destMarker.remove();
+  if(destMarker) destMarker.remove();
   destMarker=new maplibregl.Marker({color:'red'}).setLngLat(dest).addTo(map);
-  document.getElementById("mode").style.display="block";
+  calcRoute('foot-walking');
 });
 
-function route(profile){
-  fetch("https://api.openrouteservice.org/v2/directions/"+profile,{
-    method:"POST",
+/* ===== 音声ナビ用関数 ===== */
+function speak(text){
+  if('speechSynthesis' in window){
+    const msg = new SpeechSynthesisUtterance(text);
+    msg.lang='ja-JP';
+    window.speechSynthesis.speak(msg);
+  }
+}
+
+/* ===== ルート計算 + 3D表示 ===== */
+function calcRoute(profile){
+  if(!current || !dest) return;
+  fetch(`https://api.openrouteservice.org/v2/directions/${profile}`,{
+    method:'POST',
     headers:{
-      "Authorization":ORS_API_KEY,
-      "Content-Type":"application/json"
+      'Authorization':ORS_API_KEY,
+      'Content-Type':'application/json'
     },
     body:JSON.stringify({coordinates:[current,dest],alternative_routes:{share_factor:0.6,target_count:2}})
   })
-  .then(r=>r.json()).then(d=>{
-    if(map.getSource("route")){
-      map.removeLayer("route");map.removeSource("route");
+  .then(r=>r.json())
+  .then(d=>{
+    // ルートGeoJSON
+    const route = d.features[0];
+    if(map.getSource('route')){
+      map.removeLayer('route'); map.removeSource('route');
     }
-    map.addSource("route",{type:"geojson",data:d});
+    map.addSource('route',{type:'geojson',data:route});
     map.addLayer({
-      id:"route",type:"line",source:"route",
-      paint:{
-        "line-width":6,
-        "line-color":["get","recommended"]
-      }
+      id:'route', type:'line', source:'route',
+      paint:{'line-width':6,'line-color':'#1e90ff'}
     });
-    const s=d.features[0].properties.summary;
+
+    // 距離・時間
+    const s = route.properties.summary;
+    const info = document.getElementById('info');
     info.innerText=`距離 ${(s.distance/1000).toFixed(1)}km / 約 ${Math.round(s.duration/60)}分`;
-    info.style.display="block";
+    info.style.display='block';
+
+    // 音声ナビ用
+    const coords = route.geometry.coordinates;
+    trackPositionForVoice(coords, profile);
   });
+}
+
+/* ===== 現在地に合わせて音声ナビ ===== */
+let lastVoiceIndex=-1;
+function trackPositionForVoice(coords, mode){
+  lastVoiceIndex=-1;
+  const interval = setInterval(()=>{
+    if(!current) return;
+    // 最も近い次の座標を探す
+    let nextIndex=coords.findIndex((c,i)=>i>lastVoiceIndex && distance(current,c)>0);
+    if(nextIndex===-1){ clearInterval(interval); return; }
+
+    const dist = distance(current, coords[nextIndex]);
+    if(dist<50 && nextIndex>lastVoiceIndex){ // 50m手前で案内
+      speak(`${Math.round(dist)}メートル先、曲がり角です`);
+      lastVoiceIndex=nextIndex;
+    }
+  },1000);
+}
+
+/* ===== 距離計算（経度緯度） ===== */
+function distance(a,b){
+  const R = 6371000;
+  const rad = Math.PI/180;
+  const dLat=(b[1]-a[1])*rad;
+  const dLon=(b[0]-a[0])*rad;
+  const lat1=a[1]*rad, lat2=b[1]*rad;
+  const x = dLon*Math.cos((lat1+lat2)/2);
+  const y = dLat;
+  return Math.sqrt(x*x + y*y)*R;
 }
 </script>
 </body>
