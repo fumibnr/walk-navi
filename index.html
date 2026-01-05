@@ -3,153 +3,125 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>ナビ</title>
+<title>限界突破ナビ</title>
 
 <link href="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet">
 <script src="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
 
 <style>
-html, body {
-  margin: 0;
-  padding: 0;
-  height: 100%;
+html,body,#map{margin:0;height:100%}
+#ui{
+  position:absolute;top:10px;left:50%;transform:translateX(-50%);
+  background:white;border-radius:14px;padding:8px;z-index:10;
+  box-shadow:0 4px 10px rgba(0,0,0,.3)
 }
-#map {
-  width: 100%;
-  height: 100%;
+#ui input{font-size:16px;padding:6px;width:180px}
+#ui button{font-size:16px}
+#mode{
+  display:none;margin-top:6px;text-align:center
+}
+#mode button{margin:0 6px}
+
+#info{
+  position:absolute;bottom:20px;left:50%;transform:translateX(-50%);
+  background:white;padding:10px 14px;border-radius:16px;
+  box-shadow:0 4px 10px rgba(0,0,0,.3);
+  display:none;z-index:10;font-size:15px
 }
 
-/* 検索UI */
-#searchBox {
-  position: absolute;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: white;
-  padding: 6px;
-  border-radius: 10px;
-  display: flex;
-  gap: 5px;
-  z-index: 10;
-}
-#searchInput {
-  font-size: 16px;
-  padding: 6px;
-  width: 180px;
-}
-#searchBtn {
-  font-size: 16px;
-}
-
-/* 現在地ボタン */
-#locBtn {
-  position: absolute;
-  bottom: 20px;
-  right: 20px;
-  background: white;
-  border-radius: 50%;
-  padding: 12px;
-  font-size: 20px;
-  z-index: 10;
+#locBtn{
+  position:absolute;bottom:20px;right:16px;
+  width:48px;height:48px;border-radius:50%;
+  border:none;background:white;font-size:22px;
+  box-shadow:0 2px 6px rgba(0,0,0,.3);z-index:10
 }
 </style>
 </head>
 
 <body>
-
 <div id="map"></div>
 
-<div id="searchBox">
-  <input id="searchInput" placeholder="住所・場所を入力">
-  <button id="searchBtn">🔍</button>
+<div id="ui">
+  <input id="searchInput" placeholder="目的地を入力">
+  <button onclick="search()">🔍</button>
+  <div id="mode">
+    <button onclick="route('foot-walking')">🚶</button>
+    <button onclick="route('driving-car')">🚗</button>
+  </div>
 </div>
 
-<button id="locBtn">◎</button>
+<div id="info"></div>
+<button id="locBtn" onclick="goCurrent()">⌖</button>
 
 <script>
-const map = new maplibregl.Map({
-  container: 'map',
-  style: 'https://demotiles.maplibre.org/style.json', // ←カラー地図
-  center: [139.767, 35.681],
-  zoom: 15
-});
+const ORS_API_KEY = "ここにあなたのAPIキー";
 
-map.addControl(new maplibregl.NavigationControl());
+const map = new maplibregl.Map({
+  container:'map',
+  style:'https://tiles.openfreemap.org/styles/liberty',
+  center:[139.767,35.681],
+  zoom:15
+});
 map.doubleClickZoom.disable();
 
-let currentMarker;
+let current=[139.767,35.681];
+let dest=null;
+
+navigator.geolocation.watchPosition(p=>{
+  current=[p.coords.longitude,p.coords.latitude];
+  map.easeTo({center:current,bearing:p.coords.heading||0,duration:500});
+},{},{enableHighAccuracy:true});
+
+function goCurrent(){
+  map.easeTo({center:current,zoom:17});
+}
+
 let destMarker;
-
-// 現在地取得
-navigator.geolocation.watchPosition(pos => {
-  const lng = pos.coords.longitude;
-  const lat = pos.coords.latitude;
-  const heading = pos.coords.heading || 0;
-
-  if (!currentMarker) {
-    currentMarker = new maplibregl.Marker({
-      color: '#1e90ff'
-    }).setLngLat([lng, lat]).addTo(map);
-    map.setCenter([lng, lat]);
-  } else {
-    currentMarker.setLngLat([lng, lat]);
-  }
-
-  map.easeTo({
-    center: [lng, lat],
-    bearing: heading,
-    duration: 500
-  });
-}, err => {
-  alert("位置情報を許可してね");
-}, { enableHighAccuracy: true });
-
-// 現在地ボタン
-document.getElementById("locBtn").onclick = () => {
-  if (currentMarker) {
-    map.easeTo({ center: currentMarker.getLngLat(), zoom: 17 });
-  }
-};
-
-// 検索
-document.getElementById("searchBtn").onclick = search;
-document.getElementById("searchInput").addEventListener("keydown", e => {
-  if (e.key === "Enter") search();
-});
-
-function search() {
-  const q = searchInput.value;
-  if (!q) return;
-
-  fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`, {
-    headers: { "Accept-Language": "ja" }
-  })
-  .then(r => r.json())
-  .then(data => {
-    if (!data[0]) {
-      alert("見つからない😢");
-      return;
-    }
-    const lng = data[0].lon;
-    const lat = data[0].lat;
-
-    if (destMarker) destMarker.remove();
-    destMarker = new maplibregl.Marker({ color: 'red' })
-      .setLngLat([lng, lat])
-      .addTo(map);
-
-    map.easeTo({ center: [lng, lat], zoom: 16 });
+function search(){
+  fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchInput.value)}`)
+  .then(r=>r.json()).then(d=>{
+    if(!d[0])return alert("見つからん😇");
+    dest=[+d[0].lon,+d[0].lat];
+    if(destMarker)destMarker.remove();
+    destMarker=new maplibregl.Marker({color:'red'}).setLngLat(dest).addTo(map);
+    map.easeTo({center:dest,zoom:16});
+    document.getElementById("mode").style.display="block";
   });
 }
 
-// ダブルタップで目的地
-map.on("dblclick", e => {
-  if (destMarker) destMarker.remove();
-  destMarker = new maplibregl.Marker({ color: 'red' })
-    .setLngLat(e.lngLat)
-    .addTo(map);
+map.on("dblclick",e=>{
+  dest=[e.lngLat.lng,e.lngLat.lat];
+  if(destMarker)destMarker.remove();
+  destMarker=new maplibregl.Marker({color:'red'}).setLngLat(dest).addTo(map);
+  document.getElementById("mode").style.display="block";
 });
-</script>
 
+function route(profile){
+  fetch("https://api.openrouteservice.org/v2/directions/"+profile,{
+    method:"POST",
+    headers:{
+      "Authorization":ORS_API_KEY,
+      "Content-Type":"application/json"
+    },
+    body:JSON.stringify({coordinates:[current,dest],alternative_routes:{share_factor:0.6,target_count:2}})
+  })
+  .then(r=>r.json()).then(d=>{
+    if(map.getSource("route")){
+      map.removeLayer("route");map.removeSource("route");
+    }
+    map.addSource("route",{type:"geojson",data:d});
+    map.addLayer({
+      id:"route",type:"line",source:"route",
+      paint:{
+        "line-width":6,
+        "line-color":["get","recommended"]
+      }
+    });
+    const s=d.features[0].properties.summary;
+    info.innerText=`距離 ${(s.distance/1000).toFixed(1)}km / 約 ${Math.round(s.duration/60)}分`;
+    info.style.display="block";
+  });
+}
+</script>
 </body>
 </html>
