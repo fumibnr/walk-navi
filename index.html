@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>完全版ナビ（コンパス切替 & APIキー入り）</title>
+<title>完全版ナビ（安定タイル・APIキー入り）</title>
 <link href="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet">
 <script src="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
 <style>
@@ -48,7 +48,7 @@ box-shadow:0 4px 10px rgba(0,0,0,.3);}
 <div id="info"></div>
 
 <script>
-// ここにあなたのAPIキーを入れました
+// あなたのOpenRouteService APIキー
 const ORS_API_KEY="eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImY0ZTI4ZDE0Y2I2NTQwNzM5ZWYzMDg5YTBlNmFkNTczIiwiaCI6Im11cm11cjY0In0=";
 
 let current=null,currentHeading=0,dest=null,destMarker=null;
@@ -57,7 +57,7 @@ let routeLines=[],selectedRoute=null,currentProfile='foot-walking',viewMode='2d'
 /* ===== 地図初期化 ===== */
 const map=new maplibregl.Map({
 container:'map',
-style:'https://tiles.openfreemap.org/styles/liberty',
+style:'https://demotiles.maplibre.org/style.json',
 center:[139.767,35.681],
 zoom:15
 });
