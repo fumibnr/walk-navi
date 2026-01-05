@@ -3,194 +3,210 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>限界突破ナビ 完全版</title>
-
+<title>超改造版ナビ 完全オフライン対応</title>
 <link href="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet">
 <script src="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
-
 <style>
 html,body,#map{margin:0;height:100%}
-#ui{
-  position:absolute;top:10px;left:50%;transform:translateX(-50%);
-  background:white;padding:8px;border-radius:14px;z-index:10;
-  box-shadow:0 4px 10px rgba(0,0,0,.3);
-}
+#ui{position:absolute;top:10px;left:50%;transform:translateX(-50%);
+background:white;padding:8px;border-radius:14px;z-index:10;
+box-shadow:0 4px 10px rgba(0,0,0,.3);}
 #ui input{font-size:16px;padding:6px;width:180px}
 #ui button{font-size:15px;margin-left:4px}
-#viewMode,#routeSelect{display:flex;margin-top:6px}
-#viewMode button,#routeSelect button{
-  flex:1;margin:0 2px;border-radius:8px
-}
-#locBtn{
-  position:absolute;bottom:20px;right:16px;width:60px;height:60px;
-  border-radius:50%;border:none;background:black;color:white;font-size:28px;
-  box-shadow:0 2px 6px rgba(0,0,0,.4);z-index:10;
-}
-#info{
-  position:absolute;bottom:90px;left:50%;transform:translateX(-50%);
-  background:white;padding:10px 14px;border-radius:16px;
-  box-shadow:0 4px 10px rgba(0,0,0,.3);
-  display:none;z-index:10;font-size:15px;
-}
+#viewMode,#routeSelect,#offlineToggle,#saveRoute{display:flex;margin-top:6px}
+#viewMode button,#routeSelect button,#offlineToggle button,#saveRoute button{flex:1;margin:0 2px;border-radius:8px}
+#locBtn{position:absolute;bottom:20px;right:16px;width:60px;height:60px;
+border-radius:50%;border:none;background:black;color:white;font-size:28px;
+box-shadow:0 2px 6px rgba(0,0,0,.4);z-index:10;}
+#info{position:absolute;bottom:90px;left:50%;transform:translateX(-50%);
+background:white;padding:10px 14px;border-radius:16px;
+box-shadow:0 4px 10px rgba(0,0,0,.3);display:none;z-index:10;font-size:15px;}
+#suggestions{position:absolute;top:50px;left:50%;transform:translateX(-50%);
+background:white;border-radius:12px;max-height:150px;overflow:auto;z-index:11;
+width:200px;display:none;}
+#suggestions div{padding:6px 8px;cursor:pointer;}
+#suggestions div:hover{background:#eee;}
 </style>
 </head>
 <body>
 <div id="map"></div>
 
 <div id="ui">
-  <input id="searchInput" placeholder="目的地を入力">
-  <button onclick="search()">🔍検索</button>
-  
-  <div id="viewMode">
-    <button onclick="setView('2d')">2D</button>
-    <button onclick="setView('2dn')">2DN</button>
-    <button onclick="setView('3d')">3D</button>
-  </div>
+<input id="searchInput" placeholder="目的地を入力">
+<button onclick="search()">🔍検索</button>
 
-  <div id="routeSelect" style="display:none;">
-    <button onclick="startNav('foot-walking')">徒歩</button>
-    <button onclick="startNav('driving-car')">車</button>
-    <button onclick="startNav(currentProfile)">ナビ開始</button>
-  </div>
+<div id="viewMode">
+<button onclick="setView('2d')">2D</button>
+<button onclick="setView('2dn')">2DN</button>
+<button onclick="setView('3d')">3D</button>
 </div>
 
+<div id="routeSelect" style="display:none;">
+<button onclick="getRoutes('foot-walking')">徒歩</button>
+<button onclick="getRoutes('driving-car')">車</button>
+</div>
+
+<div id="saveRoute" style="display:none;">
+<button onclick="saveRouteOffline()">ルート保存（オフライン用）</button>
+</div>
+
+<div id="offlineToggle">
+<button onclick="toggleOffline()">オフライン切替</button>
+</div>
+</div>
+
+<div id="suggestions"></div>
 <button id="locBtn" onclick="goCurrent()">⌖</button>
 <div id="info"></div>
 
 <script>
-const ORS_API_KEY = "ここにAPIキー";
-const map = new maplibregl.Map({
-  container:'map',
-  style:'https://tiles.openfreemap.org/styles/liberty',
-  center:[139.767,35.681],
-  zoom:15
+const ORS_API_KEY="ここにAPIキー"; // 取得済みAPIキー
+let useOffline=false,current=null,currentHeading=0,dest=null,destMarker=null;
+let routeLines=[],selectedRoute=null,currentProfile='foot-walking',viewMode='2d',currentMarker=null;
+let buildingsAdded=false;
+
+/* ===== 地図初期化 ===== */
+const map=new maplibregl.Map({
+container:'map',
+style:'https://tiles.openfreemap.org/styles/liberty',
+center:[139.767,35.681],
+zoom:15
 });
 map.doubleClickZoom.disable();
 
-let current=null, currentHeading=0;
-let dest=null, destMarker=null;
-let currentProfile='foot-walking';
-let viewMode='2d';
-
 /* ===== GPS追従 ===== */
 navigator.geolocation.watchPosition(p=>{
-  current=[p.coords.longitude,p.coords.latitude];
-  currentHeading=p.coords.heading ?? currentHeading;
+current=[p.coords.longitude,p.coords.latitude];
+currentHeading=p.coords.heading??currentHeading;
+if(!currentMarker){
+  const el=document.createElement('div');
+  el.style.width='30px'; el.style.height='30px'; el.style.background='blue';
+  el.style.borderRadius='50%'; el.style.transform='rotate(0deg)';
+  currentMarker=new maplibregl.Marker({element:el,rotationAlignment:"map"}).setLngLat(current).addTo(map);
+}else{currentMarker.setLngLat(current);currentMarker.getElement().style.transform=`rotate(${currentHeading??0}deg)`;}
 },e=>console.log(e),{enableHighAccuracy:true});
 
 /* ===== 現在地ボタン ===== */
-function goCurrent(){ if(!current) return; map.easeTo({center:current,zoom:17}); }
+function goCurrent(){if(!current) return;map.easeTo({center:current,zoom:17});}
 
 /* ===== 視点切替 ===== */
 function setView(mode){
-  viewMode = mode;
-  if(mode==='2d') map.setPitch(0), map.setBearing(0);
-  if(mode==='2dn') map.setPitch(0), map.setBearing(0);
-  if(mode==='3d') map.setPitch(60), map.setBearing(currentHeading), enable3DBuildings();
+viewMode=mode;
+if(mode==='2d'||mode==='2dn'){map.setPitch(0);map.setBearing(0);}
+if(mode==='3d'){map.setPitch(60);map.setBearing(currentHeading);enable3DBuildings();}
 }
 
 /* ===== 3D建物 ===== */
-let buildingsAdded=false;
 function enable3DBuildings(){
-  if(buildingsAdded) return;
-  map.addLayer({
-    id:'3d-buildings',
-    source:'openmaptiles',
-    'source-layer':'building',
-    type:'fill-extrusion',
-    minzoom:15,
-    paint:{
-      'fill-extrusion-color':'#aaa',
-      'fill-extrusion-height':['coalesce',['get','height'],10],
-      'fill-extrusion-base':['coalesce',['get','min_height'],0],
-      'fill-extrusion-opacity':0.6
-    }
-  });
-  buildingsAdded=true;
+if(buildingsAdded)return;
+map.addLayer({id:'3d-buildings',source:'openmaptiles','source-layer':'building',type:'fill-extrusion',minzoom:15,
+paint:{'fill-extrusion-color':'#aaa','fill-extrusion-height':['coalesce',['get','height'],10],'fill-extrusion-base':['coalesce',['get','min_height'],0],'fill-extrusion-opacity':0.6}});
+buildingsAdded=true;
+}
+
+/* ===== オフライン切替 ===== */
+function toggleOffline(){
+useOffline=!useOffline;
+if(useOffline){
+map.setStyle('offline_tiles_style.json');
+fetch('route_offline.json').then(r=>r.json()).then(data=>{clearRoutes();routeLines=[data];selectRoute(0);});
+}else{map.setStyle('https://tiles.openfreemap.org/styles/liberty');}
 }
 
 /* ===== 検索 ===== */
 function search(){
-  const query = document.getElementById("searchInput").value;
-  fetch(`https://api.openrouteservice.org/geocode/search?api_key=${ORS_API_KEY}&text=${encodeURIComponent(query)}`)
-  .then(r=>r.json())
-  .then(d=>{
-    if(!d.features[0]) return alert("見つからない😇");
-    const [lng,lat]=d.features[0].geometry.coordinates;
-    setDest([lng,lat]);
-  });
+const query=document.getElementById("searchInput").value;
+fetch(`https://api.openrouteservice.org/geocode/search?api_key=${ORS_API_KEY}&text=${encodeURIComponent(query)}`)
+.then(r=>r.json())
+.then(d=>{
+const features=d.features;
+const sug=document.getElementById('suggestions');sug.innerHTML='';
+if(!features.length)return alert("見つからない😇");
+features.forEach(f=>{
+const div=document.createElement('div');div.innerText=f.properties.label;
+div.onclick=()=>{setDest(f.geometry.coordinates);sug.style.display='none';}
+sug.appendChild(div);
+});
+sug.style.display='block';
+}).catch(e=>alert("検索できません"));
 }
 
 /* ===== 目的地設定 ===== */
 function setDest(coord){
-  dest=coord;
-  if(destMarker) destMarker.remove();
-  destMarker=new maplibregl.Marker({color:'red'}).setLngLat(dest).addTo(map);
-  map.easeTo({center:dest,zoom:16});
-  document.getElementById('routeSelect').style.display='flex'; // ボタン表示
+dest=coord;if(destMarker) destMarker.remove();
+destMarker=new maplibregl.Marker({color:'red'}).setLngLat(dest).addTo(map);
+map.easeTo({center:dest,zoom:16});
+document.getElementById('routeSelect').style.display='flex';
+document.getElementById('saveRoute').style.display='none';
+clearRoutes();
 }
 
 /* ===== ダブルタップ目的地 ===== */
 let lastTap=0;
-map.on('touchend',e=>{
-  const now=Date.now();
-  if(now-lastTap<400){
-    const touch = e.changedTouches[0];
-    const bbox = map.getContainer().getBoundingClientRect();
-    const lngLat = map.unproject([touch.clientX-bbox.left,touch.clientY-bbox.top]);
-    setDest([lngLat.lng,lngLat.lat]);
-  }
-  lastTap=now;
+map.getCanvas().addEventListener('touchend',e=>{
+const now=Date.now();
+if(now-lastTap<500){
+const touch=e.changedTouches[0];const rect=map.getCanvas().getBoundingClientRect();
+const x=touch.clientX-rect.left,y=touch.clientY-rect.top;
+const lngLat=map.unproject([x,y]);setDest([lngLat.lng,lngLat.lat]);
+}lastTap=now;
 });
 
-/* ===== ナビ開始 ===== */
-function startNav(profile){
-  if(!dest || !current) return;
-  currentProfile=profile;
-  fetch(`https://api.openrouteservice.org/v2/directions/${profile}`,{
-    method:'POST',
-    headers:{'Authorization':ORS_API_KEY,'Content-Type':'application/json'},
-    body:JSON.stringify({coordinates:[current,dest]})
-  }).then(r=>r.json()).then(d=>{
-    const route=d.features[0];
-    if(map.getSource('route')) map.removeLayer('route'), map.removeSource('route');
-    map.addSource('route',{type:'geojson',data:route});
-    map.addLayer({id:'route',type:'line',source:'route',paint:{'line-width':6,'line-color':'#1e90ff','line-offset':2}});
-    document.getElementById('info').innerText=`距離 ${(route.properties.summary.distance/1000).toFixed(1)}km / 約 ${Math.round(route.properties.summary.duration/60)}分`;
-    document.getElementById('info').style.display='block';
-    trackPositionForVoice(route.geometry.coordinates);
-  });
+/* ===== 複数ルート取得 ===== */
+function getRoutes(profile){
+if(!dest||!current) return;currentProfile=profile;
+fetch(`https://api.openrouteservice.org/v2/directions/${profile}/geojson`,{
+method:'POST',
+headers:{'Authorization':ORS_API_KEY,'Content-Type':'application/json'},
+body:JSON.stringify({coordinates:[current,dest],options:{alternative_routes:{target_count:3,share_factor:0.6}}})
+}).then(r=>r.json()).then(d=>{
+clearRoutes();routeLines=d.features;
+routeLines.forEach((f,i)=>{
+map.addSource('route'+i,{type:'geojson',data:f});
+map.addLayer({id:'route'+i,type:'line',source:'route'+i,paint:{'line-width':4,'line-color':'#888','line-opacity':0.5}});
+map.on('click','route'+i,()=>selectRoute(i));
+});
+document.getElementById('saveRoute').style.display='flex';
+alert("ルート候補を選択してください");
+});
+}
+
+/* ===== ルート選択＆ナビ開始 ===== */
+function clearRoutes(){routeLines.forEach((f,i)=>{if(map.getLayer('route'+i))map.removeLayer('route'+i);if(map.getSource('route'+i))map.removeSource('route'+i);});routeLines=[];selectedRoute=null;if(map.getLayer('routeSelected'))map.removeLayer('routeSelected');if(map.getSource('routeSelected'))map.removeSource('routeSelected');}
+function selectRoute(i){if(selectedRoute!==null){map.removeLayer('routeSelected');map.removeSource('routeSelected');}selectedRoute=i;map.addSource('routeSelected',{type:'geojson',data:routeLines[i]});map.addLayer({id:'routeSelected',type:'line',source:'routeSelected',paint:{'line-width':6,'line-color':'#1e90ff'}});startNavSelected(routeLines[i]);}
+
+/* ===== ナビ開始（選択ルート） ===== */
+function startNavSelected(route){
+const coords=route.geometry.coordinates;
+document.getElementById('info').innerText=`距離 ${(route.properties.summary.distance/1000).toFixed(1)}km / 約 ${Math.round(route.properties.summary.duration/60)}分`;
+document.getElementById('info').style.display='block';
+trackPositionForVoice(coords);
 }
 
 /* ===== 音声ナビ ===== */
-function speak(text){
-  if('speechSynthesis' in window){
-    const msg = new SpeechSynthesisUtterance(text);
-    msg.lang='ja-JP';
-    window.speechSynthesis.speak(msg);
-  }
-}
+function speak(text){if('speechSynthesis' in window){const msg=new SpeechSynthesisUtterance(text);msg.lang='ja-JP';window.speechSynthesis.speak(msg);}}
 
-/* ===== ルート追従＆音声 ===== */
 let lastVoiceIndex=-1;
 function trackPositionForVoice(coords){
-  lastVoiceIndex=-1;
-  const interval=setInterval(()=>{
-    if(!current) return;
-    let nextIndex=coords.findIndex((c,i)=>i>lastVoiceIndex && distance(current,c)>0);
-    if(nextIndex===-1){ clearInterval(interval); return; }
-    const dist=distance(current, coords[nextIndex]);
-    if(dist<50 && nextIndex>lastVoiceIndex){ speak(`${Math.round(dist)}メートル先、曲がり角です`); lastVoiceIndex=nextIndex; }
-  },1000);
+lastVoiceIndex=-1;
+const interval=setInterval(()=>{
+if(!current) return;
+let nextIndex=coords.findIndex((c,i)=>i>lastVoiceIndex && distance(current,c)>0);
+if(nextIndex===-1){clearInterval(interval);return;}
+const dist=distance(current,coords[nextIndex]);
+if(dist<50 && nextIndex>lastVoiceIndex){speak(`${Math.round(dist)}メートル先、曲がり角です`);lastVoiceIndex=nextIndex;}
+},1000);
 }
 
 /* ===== 距離計算 ===== */
-function distance(a,b){
-  const R=6371000, rad=Math.PI/180;
-  const dLat=(b[1]-a[1])*rad, dLon=(b[0]-a[0])*rad;
-  const lat1=a[1]*rad, lat2=b[1]*rad;
-  const x=dLon*Math.cos((lat1+lat2)/2), y=dLat;
-  return Math.sqrt(x*x+y*y)*R;
+function distance(a,b){const R=6371000,rad=Math.PI/180;const dLat=(b[1]-a[1])*rad,dLon=(b[0]-a[0])*rad;const lat1=a[1]*rad,lat2=b[1]*rad;const x=dLon*Math.cos((lat1+lat2)/2),y=dLat;return Math.sqrt(x*x+y*y)*R;}
+
+/* ===== オフライン用ルート保存 ===== */
+function saveRouteOffline(){
+if(selectedRoute===null){alert("まずルートを選択してください");return;}
+const dataStr="data:text/json;charset=utf-8,"+encodeURIComponent(JSON.stringify(routeLines[selectedRoute]));
+const dl=document.createElement('a');dl.setAttribute("href",dataStr);dl.setAttribute("download","route_offline.json");
+dl.click();alert("オフライン用ルートを保存しました");
 }
 </script>
 </body>
