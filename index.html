@@ -3,27 +3,24 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>超改造版ナビ 3D滑らか＆検索修正</title>
+<title>完全版ナビ（コンパス切替 & APIキー入り）</title>
 <link href="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet">
 <script src="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
 <style>
-html,body,#map{margin:0;height:100%}
+html,body,#map{margin:0;height:100%;}
 #ui{position:absolute;top:10px;left:50%;transform:translateX(-50%);
 background:white;padding:8px;border-radius:14px;z-index:10;
 box-shadow:0 4px 10px rgba(0,0,0,.3);}
-#ui input{font-size:16px;padding:6px;width:180px}
-#ui button{font-size:15px;margin-left:4px}
-#viewMode,#routeSelect,#offlineToggle,#saveRoute{display:flex;margin-top:6px}
-#viewMode button,#routeSelect button,#offlineToggle button,#saveRoute button{flex:1;margin:0 2px;border-radius:8px}
-#locBtn{position:absolute;bottom:20px;right:16px;width:60px;height:60px;
-border-radius:50%;border:none;background:black;color:white;font-size:28px;
-box-shadow:0 2px 6px rgba(0,0,0,.4);z-index:10;}
-#info{position:absolute;bottom:90px;left:50%;transform:translateX(-50%);
-background:white;padding:10px 14px;border-radius:16px;
-box-shadow:0 4px 10px rgba(0,0,0,.3);display:none;z-index:10;font-size:15px;}
-#suggestions{position:absolute;top:50px;left:50%;transform:translateX(-50%);
-background:white;border-radius:12px;max-height:150px;overflow:auto;z-index:11;
-width:200px;display:none;}
+#ui input{font-size:16px;padding:6px;width:180px;}
+#ui button{font-size:15px;margin-left:4px;}
+#routeSelect{display:none;margin-top:6px;}
+#routeSelect button{flex:1;margin:0 2px;border-radius:8px;}
+#saveRoute{display:none;margin-top:6px;}
+#saveRoute button{flex:1;margin:0 2px;border-radius:8px;}
+#locBtn{position:absolute;bottom:20px;right:16px;width:60px;height:60px;border-radius:50%;border:none;background:black;color:white;font-size:28px;box-shadow:0 2px 6px rgba(0,0,0,.4);z-index:10;}
+#compassBtn{position:absolute;top:10px;right:10px;width:50px;height:50px;border-radius:50%;border:none;background:white;box-shadow:0 2px 6px rgba(0,0,0,0.3);font-size:24px;z-index:10;}
+#info{position:absolute;bottom:90px;left:50%;transform:translateX(-50%);background:white;padding:10px 14px;border-radius:16px;box-shadow:0 4px 10px rgba(0,0,0,.3);display:none;z-index:10;font-size:15px;}
+#suggestions{position:absolute;top:50px;left:50%;transform:translateX(-50%);background:white;border-radius:12px;max-height:150px;overflow:auto;z-index:11;width:200px;display:none;}
 #suggestions div{padding:6px 8px;cursor:pointer;}
 #suggestions div:hover{background:#eee;}
 </style>
@@ -35,35 +32,27 @@ width:200px;display:none;}
 <input id="searchInput" placeholder="目的地を入力">
 <button onclick="search()">🔍検索</button>
 
-<div id="viewMode">
-<button onclick="setView('2d')">2D</button>
-<button onclick="setView('2dn')">2DN</button>
-<button onclick="setView('3d')">3D</button>
-</div>
-
-<div id="routeSelect" style="display:none;">
+<div id="routeSelect">
 <button onclick="getRoutes('foot-walking')">徒歩</button>
 <button onclick="getRoutes('driving-car')">車</button>
 </div>
 
-<div id="saveRoute" style="display:none;">
+<div id="saveRoute">
 <button onclick="saveRouteOffline()">ルート保存（オフライン用）</button>
-</div>
-
-<div id="offlineToggle">
-<button onclick="toggleOffline()">オンライン／オフライン切替</button>
 </div>
 </div>
 
 <div id="suggestions"></div>
 <button id="locBtn" onclick="goCurrent()">⌖</button>
+<button id="compassBtn">🧭</button>
 <div id="info"></div>
 
 <script>
-const ORS_API_KEY="ここにAPIキー"; // OpenRouteService APIキー
-let useOffline=false,current=null,currentHeading=0,dest=null,destMarker=null;
-let routeLines=[],selectedRoute=null,currentProfile='foot-walking',viewMode='2d',currentMarker=null;
-let buildingsAdded=false;
+// ここにあなたのAPIキーを入れました
+const ORS_API_KEY="eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImY0ZTI4ZDE0Y2I2NTQwNzM5ZWYzMDg5YTBlNmFkNTczIiwiaCI6Im11cm11cjY0In0=";
+
+let current=null,currentHeading=0,dest=null,destMarker=null;
+let routeLines=[],selectedRoute=null,currentProfile='foot-walking',viewMode='2d',currentMarker=null,buildingsAdded=false;
 
 /* ===== 地図初期化 ===== */
 const map=new maplibregl.Map({
@@ -80,20 +69,39 @@ current=[p.coords.longitude,p.coords.latitude];
 currentHeading=p.coords.heading??currentHeading;
 if(!currentMarker){
   const el=document.createElement('div');
-  el.style.width='30px'; el.style.height='30px'; el.style.background='blue';
-  el.style.borderRadius='50%'; el.style.transform='rotate(0deg)';
+  el.style.width='20px'; el.style.height='20px'; 
+  el.style.background='blue';
+  el.style.borderRadius='50%';
+  el.style.transform=`rotate(${currentHeading??0}deg)`;
   currentMarker=new maplibregl.Marker({element:el,rotationAlignment:"map"}).setLngLat(current).addTo(map);
-}else{currentMarker.setLngLat(current);currentMarker.getElement().style.transform=`rotate(${currentHeading??0}deg)`;}
-},e=>console.log(e),{enableHighAccuracy:true});
+}else{
+  currentMarker.setLngLat(current);
+  currentMarker.getElement().style.transform=`rotate(${currentHeading??0}deg)`;
+}
+},e=>console.error("GPS取得エラー:",e),{enableHighAccuracy:true,timeout:10000,maximumAge:0});
 
 /* ===== 現在地ボタン ===== */
-function goCurrent(){if(!current) return;map.easeTo({center:current,zoom:17});}
+function goCurrent(){
+if(!current){alert("現在地取得中…少し待ってください");return;}
+map.easeTo({center:current,zoom:17});
+}
+
+/* ===== コンパスボタン切替 ===== */
+let viewModes = ['2d','2dn','3d']; let viewIndex=0;
+document.getElementById('compassBtn').addEventListener('click',()=>{
+  viewIndex=(viewIndex+1)%viewModes.length;
+  setView(viewModes[viewIndex]);
+});
 
 /* ===== 視点切替 ===== */
 function setView(mode){
 viewMode=mode;
-if(mode==='2d'||mode==='2dn'){map.easeTo({pitch:0,bearing:0});}
-if(mode==='3d'){map.easeTo({pitch:60,bearing:currentHeading,duration:1500});enable3DBuildings();}
+if(mode==='2d' || mode==='2dn'){
+  map.easeTo({pitch:0,bearing:(mode==='2dn'?0:map.getBearing()),duration:800});
+}
+if(mode==='3d'){
+  map.easeTo({pitch:60,bearing:currentHeading,duration:1500});
+  enable3DBuildings();
 }
 
 /* ===== 3D建物 ===== */
@@ -104,20 +112,10 @@ paint:{'fill-extrusion-color':'#aaa','fill-extrusion-height':['coalesce',['get',
 buildingsAdded=true;
 }
 
-/* ===== オンライン/オフライン切替 ===== */
-function toggleOffline(){
-useOffline=!useOffline;
-if(useOffline){
-map.setStyle('offline_tiles_style.json');
-fetch('route_offline.json').then(r=>r.json()).then(data=>{clearRoutes();routeLines=[data];selectRoute(0);});
-}else{
-map.setStyle('https://tiles.openfreemap.org/styles/liberty');
-}
-}
-
-/* ===== 住所検索（POST対応） ===== */
+/* ===== 住所検索 ===== */
 function search(){
 const query=document.getElementById("searchInput").value;
+if(!navigator.onLine){alert("オフラインでは検索できません");return;}
 fetch("https://api.openrouteservice.org/geocode/search",{
 method:"POST",
 headers:{"Authorization":ORS_API_KEY,"Content-Type":"application/json"},
@@ -127,7 +125,7 @@ body:JSON.stringify({text:query,size:5})
 .then(d=>{
 const features=d.features;
 const sug=document.getElementById('suggestions');sug.innerHTML='';
-if(!features.length)return alert("見つからない😇");
+if(!features.length){alert("検索できません");return;}
 features.forEach(f=>{
 const div=document.createElement('div');div.innerText=f.properties.label;
 div.onclick=()=>{setDest(f.geometry.coordinates);sug.style.display='none';}
@@ -147,15 +145,16 @@ document.getElementById('saveRoute').style.display='none';
 clearRoutes();
 }
 
-/* ===== ダブルタップ目的地 ===== */
+/* ===== ダブルタップ目的地設定 ===== */
 let lastTap=0;
 map.getCanvas().addEventListener('touchend',e=>{
 const now=Date.now();
 if(now-lastTap<500){
-const touch=e.changedTouches[0];const rect=map.getCanvas().getBoundingClientRect();
+const touch=e.changedTouches[0];const rect=map.getBoundingClientRect();
 const x=touch.clientX-rect.left,y=touch.clientY-rect.top;
 const lngLat=map.unproject([x,y]);setDest([lngLat.lng,lngLat.lat]);
-}lastTap=now;
+}
+lastTap=now;
 });
 
 /* ===== 複数ルート取得 ===== */
@@ -179,7 +178,7 @@ alert("ルート候補を選択してください");
 
 /* ===== ルート選択＆ナビ開始 ===== */
 function clearRoutes(){routeLines.forEach((f,i)=>{if(map.getLayer('route'+i))map.removeLayer('route'+i);if(map.getSource('route'+i))map.removeSource('route'+i);});routeLines=[];selectedRoute=null;if(map.getLayer('routeSelected'))map.removeLayer('routeSelected');if(map.getSource('routeSelected'))map.removeSource('routeSelected');}
-function selectRoute(i){if(selectedRoute!==null){map.removeLayer('routeSelected');map.removeSource('routeSelected');}selectedRoute=i;map.addSource('routeSelected',{type:'geojson',data:routeLines[i]});map.addLayer({id:'routeSelected',type:'line',source:'routeSelected',paint:{'line-width':6,'line-color':'#1e90ff'}});startNavSelected(routeLines[i]);}
+function selectRoute(i){if(selectedRoute!==null){map.removeLayer('routeSelected');map.removeSource('routeSelected');}selectedRoute=i;map.addSource('routeSelected',{type:'geojson',data:routeLines[i]});map.addLayer({id:'routeSelected',type:'line',source:'routeSelected',paint:{'line-width':6,'line-color':'#1e90ff'}});startNavSelected(routeLines[i]);saveRouteOffline();}
 
 /* ===== ナビ開始 ===== */
 function startNavSelected(route){
@@ -207,13 +206,22 @@ if(dist<50 && nextIndex>lastVoiceIndex){speak(`${Math.round(dist)}メートル�
 /* ===== 距離計算 ===== */
 function distance(a,b){const R=6371000,rad=Math.PI/180;const dLat=(b[1]-a[1])*rad,dLon=(b[0]-a[0])*rad;const lat1=a[1]*rad,lat2=b[1]*rad;const x=dLon*Math.cos((lat1+lat2)/2),y=dLat;return Math.sqrt(x*x+y*y)*R;}
 
-/* ===== オフライン用ルート保存 ===== */
+/* ===== オフラインルート保存 ===== */
 function saveRouteOffline(){
-if(selectedRoute===null){alert("まずルートを選択してください");return;}
-const dataStr="data:text/json;charset=utf-8,"+encodeURIComponent(JSON.stringify(routeLines[selectedRoute]));
-const dl=document.createElement('a');dl.setAttribute("href",dataStr);dl.setAttribute("download","route_offline.json");
-dl.click();alert("オフライン用ルートを保存しました");
+if(selectedRoute===null)return;
+localStorage.setItem('lastRoute',JSON.stringify(routeLines[selectedRoute]));
+console.log("ルートをオフライン保存しました");
 }
+
+/* ===== オフラインルート復元 ===== */
+window.addEventListener('load',()=>{
+const saved=localStorage.getItem('lastRoute');
+if(saved){
+const route=JSON.parse(saved);
+map.addSource('offlineRoute',{type:'geojson',data:route});
+map.addLayer({id:'offlineRoute',type:'line',source:'offlineRoute',paint:{'line-width':6,'line-color':'#1e90ff'}});
+}
+});
 </script>
 </body>
 </html>
