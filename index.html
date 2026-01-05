@@ -12,36 +12,44 @@
 html, body { margin:0; height:100%; }
 #map { height:100%; }
 
-#searchBox {
+#panel {
   position:absolute;
-  top:10px;
+  top:env(safe-area-inset-top,10px);
   left:50%;
   transform:translateX(-50%);
-  background:white;
-  padding:8px;
-  border-radius:8px;
-  box-shadow:0 2px 6px rgba(0,0,0,.3);
+  background:#fff;
+  padding:10px;
+  border-radius:10px;
+  box-shadow:0 4px 10px rgba(0,0,0,.3);
   z-index:10;
   width:90%;
-  max-width:400px;
+  max-width:420px;
 }
+
+#info {
+  font-size:14px;
+  margin-top:6px;
+}
+
 #controls {
   display:none;
   margin-top:6px;
   text-align:center;
 }
-button { margin:2px; }
+
+button { margin:2px; font-size:15px; }
 </style>
 </head>
 
 <body>
 
-<div id="searchBox">
+<div id="panel">
   <input id="search" placeholder="住所を入力" style="width:100%;font-size:16px;">
   <div id="controls">
     <button onclick="setMode('foot-walking')">🚶 徒歩</button>
     <button onclick="setMode('driving-car')">🚗 車</button>
   </div>
+  <div id="info"></div>
 </div>
 
 <div id="map"></div>
@@ -49,73 +57,87 @@ button { margin:2px; }
 <script>
 const ORS_API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImY0ZTI4ZDE0Y2I2NTQwNzM5ZWYzMDg5YTBlNmFkNTczIiwiaCI6Im11cm11cjY0In0=";
 
-let map, start, dest, mode="foot-walking", routeId;
-let userMarker;
+let map, start, dest, mode="foot-walking";
+let userMarker, destMarker;
+let routeSources = [];
+let activeRoute = 0;
 
 map = new maplibregl.Map({
-  container: 'map',
-  style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
-  center: [139.767, 35.681],
-  zoom: 15
+  container:'map',
+  style:'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+  center:[139.767,35.681],
+  zoom:15
 });
 
+map.doubleClickZoom.disable();
 map.addControl(new maplibregl.NavigationControl());
 
-/* ===== 現在地（矢印） ===== */
+/* ==== 現在地（矢印） ==== */
 navigator.geolocation.watchPosition(pos=>{
-  start = [pos.coords.longitude, pos.coords.latitude];
+  start=[pos.coords.longitude,pos.coords.latitude];
 
   if(!userMarker){
-    const el = document.createElement("div");
-    el.style.width="20px";
-    el.style.height="20px";
-    el.style.background="blue";
+    const el=document.createElement("div");
+    el.style.width="22px";
+    el.style.height="22px";
+    el.style.background="#007aff";
     el.style.clipPath="polygon(50% 0, 0 100%, 100% 100%)";
-    userMarker = new maplibregl.Marker(el).setLngLat(start).addTo(map);
+    userMarker=new maplibregl.Marker(el).setLngLat(start).addTo(map);
     map.setCenter(start);
   } else {
     userMarker.setLngLat(start);
   }
 
-  if(pos.coords.heading !== null){
-    userMarker.getElement().style.transform =
-      `rotate(${pos.coords.heading}deg)`;
-  }
+  map.easeTo({
+    center:start,
+    bearing:pos.coords.heading||map.getBearing(),
+    duration:500
+  });
 
   if(dest) getRoute();
 },{enableHighAccuracy:true});
 
-/* ===== 検索（Nominatim） ===== */
-document.getElementById("search").addEventListener("keydown", async e=>{
-  if(e.key!=="Enter") return;
-  const q = e.target.value;
-  const res = await fetch(
-    `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`
-  );
-  const data = await res.json();
-  if(!data[0]) return alert("見つかりません");
+/* ==== 検索 ==== */
+search.addEventListener("keydown",async e=>{
+  if(e.key!=="Enter")return;
+  const q=e.target.value;
+  const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`);
+  const d=await r.json();
+  if(!d[0])return alert("見つかりません");
 
-  dest = [Number(data[0].lon), Number(data[0].lat)];
-  new maplibregl.Marker({color:"red"}).setLngLat(dest).addTo(map);
-  map.flyTo({center:dest, zoom:16});
-  document.getElementById("controls").style.display="block";
+  setDestination([+d[0].lon,+d[0].lat]);
 });
 
-/* ===== ルート ===== */
-function setMode(m){
-  mode=m;
+/* ==== 地図2回タップ ==== */
+let tap=0,timer;
+map.on("click",e=>{
+  tap++; clearTimeout(timer);
+  timer=setTimeout(()=>tap=0,300);
+  if(tap===2) setDestination([e.lngLat.lng,e.lngLat.lat]);
+});
+
+function setDestination(p){
+  dest=p;
+  if(destMarker) destMarker.setLngLat(dest);
+  else destMarker=new maplibregl.Marker({color:"red"}).setLngLat(dest).addTo(map);
+  map.flyTo({center:dest,zoom:16});
+  controls.style.display="block";
   getRoute();
 }
+
+/* ==== ルート取得（複数） ==== */
+function setMode(m){ mode=m; getRoute(); }
 
 async function getRoute(){
   if(!start||!dest) return;
 
-  if(routeId){
-    map.removeLayer(routeId);
-    map.removeSource(routeId);
-  }
+  routeSources.forEach(id=>{
+    if(map.getLayer(id))map.removeLayer(id);
+    if(map.getSource(id))map.removeSource(id);
+  });
+  routeSources=[];
 
-  const res = await fetch(
+  const res=await fetch(
     `https://api.openrouteservice.org/v2/directions/${mode}/geojson`,
     {
       method:"POST",
@@ -123,22 +145,43 @@ async function getRoute(){
         "Authorization":ORS_API_KEY,
         "Content-Type":"application/json"
       },
-      body:JSON.stringify({coordinates:[start,dest]})
+      body:JSON.stringify({
+        coordinates:[start,dest],
+        alternative_routes:{target_count:3}
+      })
     }
   );
-  const geo = await res.json();
+  const data=await res.json();
 
-  routeId="route";
-  map.addSource(routeId,{type:"geojson",data:geo});
-  map.addLayer({
-    id:routeId,
-    type:"line",
-    source:routeId,
-    paint:{
-      "line-width":6,
-      "line-color":"#007aff"
-    }
+  data.features.forEach((f,i)=>{
+    const id="route"+i;
+    map.addSource(id,{type:"geojson",data:f});
+    map.addLayer({
+      id,
+      type:"line",
+      source:id,
+      paint:{
+        "line-width": i===0?6:4,
+        "line-color": i===0?"#007aff":"#aaa"
+      }
+    });
+    map.on("click",id,()=>selectRoute(i));
+    routeSources.push(id);
   });
+
+  selectRoute(0);
+}
+
+function selectRoute(i){
+  activeRoute=i;
+  routeSources.forEach((id,idx)=>{
+    map.setPaintProperty(id,"line-color",idx===i?"#007aff":"#aaa");
+    map.setPaintProperty(id,"line-width",idx===i?6:4);
+  });
+
+  const f=map.getSource(routeSources[i])._data.features[0];
+  const d=f.properties.summary;
+  info.textContent=`残り ${Math.round(d.distance/100)/10}km / 約 ${Math.round(d.duration/60)}分`;
 }
 </script>
 </body>
