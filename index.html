@@ -1,12 +1,134 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <title>徒歩ナビ</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>徒歩・車ナビ</title>
+
+<!-- MapLibre -->
+<link
+  href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css"
+  rel="stylesheet"
+/>
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+
+<style>
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+#map {
+  width: 100%;
+  height: 100%;
+}
+#ui {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: white;
+  padding: 8px;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+  z-index: 10;
+}
+button {
+  font-size: 14px;
+  margin: 2px;
+}
+</style>
 </head>
+
 <body>
-  <h1>徒歩ナビ</h1>
-  <p>ここが表示されていたら成功です。</p>
+<div id="ui">
+  <button onclick="setMode('foot-walking')">🚶 徒歩</button>
+  <button onclick="setMode('driving-car')">🚗 車</button>
+  <span id="status">地図を2回タップで目的地</span>
+</div>
+<div id="map"></div>
+
+<script>
+const ORS_API_KEY =
+"eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImY0ZTI4ZDE0Y2I2NTQwNzM5ZWYzMDg5YTBlNmFkNTczIiwiaCI6Im11cm11cjY0In0=";
+
+let mode = "foot-walking";
+let start = null;
+let dest = null;
+let routes = [];
+
+const map = new maplibregl.Map({
+  container: "map",
+  style: "https://demotiles.maplibre.org/style.json",
+  center: [139.767, 35.681],
+  zoom: 15
+});
+
+map.addControl(new maplibregl.NavigationControl());
+
+navigator.geolocation.getCurrentPosition(pos => {
+  start = [pos.coords.longitude, pos.coords.latitude];
+  map.setCenter(start);
+  new maplibregl.Marker({ color: "blue" }).setLngLat(start).addTo(map);
+});
+
+function setMode(m) {
+  mode = m;
+  document.getElementById("status").textContent =
+    m === "foot-walking" ? "徒歩モード" : "車モード";
+  if (start && dest) getRoute();
+}
+
+let tapCount = 0;
+map.on("click", e => {
+  tapCount++;
+  setTimeout(() => tapCount = 0, 300);
+  if (tapCount === 2) {
+    dest = [e.lngLat.lng, e.lngLat.lat];
+    new maplibregl.Marker({ color: "red" }).setLngLat(dest).addTo(map);
+    getRoute();
+  }
+});
+
+async function getRoute() {
+  routes.forEach(id => {
+    if (map.getLayer(id)) map.removeLayer(id);
+    if (map.getSource(id)) map.removeSource(id);
+  });
+  routes = [];
+
+  const res = await fetch(
+    `https://api.openrouteservice.org/v2/directions/${mode}/geojson`,
+    {
+      method: "POST",
+      headers: {
+        "Authorization": ORS_API_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        coordinates: [start, dest],
+        alternative_routes: { share_factor: 0.6, target_count: 3 }
+      })
+    }
+  );
+
+  const data = await res.json();
+
+  data.features.forEach((f, i) => {
+    const id = "route" + i;
+    map.addSource(id, { type: "geojson", data: f });
+    map.addLayer({
+      id,
+      type: "line",
+      source: id,
+      paint: {
+        "line-width": i === 0 ? 6 : 4,
+        "line-color": i === 0 ? "#007aff" : "#999"
+      }
+    });
+    routes.push(id);
+  });
+}
+</script>
 </body>
 </html>
